@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>ArtVault – Discover Digital Art</title>
+  <link rel="stylesheet" href="/static/css/style.css"/>
+</head>
+<body>
+
+<nav class="navbar">
+  <div class="nav-inner">
+    <a href="/" class="nav-logo">Art<em>Vault</em></a>
+    <div class="nav-links">
+      <a href="/" class="active">Gallery</a>
+      <a href="/upload">Upload</a>
+      <div id="nav-auth"></div>
+    </div>
+  </div>
+</nav>
+
+<section class="hero">
+  <h1>Discover <em>Amazing</em> Artwork</h1>
+  <p>A creative community where artists share their digital masterpieces.</p>
+  <div class="hero-actions">
+    <a href="/upload" class="btn btn-primary">🎨 Upload Your Art</a>
+    <a href="/signup" class="btn btn-outline">Join Free</a>
+  </div>
+</section>
+
+<div class="page-container">
+
+ 
+  <div class="filter-bar">
+    <div class="search-wrap">
+      <span class="search-icon">🔍</span>
+      <input
+        type="search"
+        id="search-input"
+        placeholder="Search artworks…"
+        autocomplete="off"
+      />
+    </div>
+    <div class="category-chips" id="chips">
+      
+    </div>
+  </div>
+
+  
+  <div id="gallery">
+    <div class="spinner-wrap">
+      <div class="spinner"></div>
+      <p>Loading artworks…</p>
+    </div>
+  </div>
+</div>
+
+
+<div id="toast-container"></div>
+
+<script src="/static/js/main.js"></script>
+<script>

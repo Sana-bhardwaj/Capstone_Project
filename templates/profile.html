@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>ArtVault – My Profile</title>
+  <link rel="stylesheet" href="/static/css/style.css"/>
+</head>
+<body>
+
+<nav class="navbar">
+  <div class="nav-inner">
+    <a href="/" class="nav-logo">Art<em>Vault</em></a>
+    <div class="nav-links">
+      <a href="/">Gallery</a>
+      <a href="/upload">Upload</a>
+      <div id="nav-auth"></div>
+    </div>
+  </div>
+</nav>
+
+<div class="page-container">
+
+  <div class="profile-header" id="profile-header">
+    <div class="spinner-wrap"><div class="spinner"></div></div>
+  </div>
+
+  <div class="page-header">
+    <h2>My Artworks</h2>
+    <p>All the pieces you've shared with the community.</p>
+  </div>
+
+  <div id="my-gallery">
+    <div class="spinner-wrap"><div class="spinner"></div><p>Loading your artworks…</p></div>
+  </div>
+</div>
+
+<div id="toast-container"></div>
+<script src="/static/js/main.js"></script>
+<script>
+
+
+async function loadProfile() {
+  const user = await getCurrentUser();
+
+
+  if (!user.logged_in) {
+    showToast("Please log in to view your profile", "error");
+    setTimeout(() => window.location.href = "/login", 1200);
+    return;
+  }
+
+  const initial = user.username.charAt(0).toUpperCase();
+  document.getElementById("profile-header").innerHTML = `
+    <div class="avatar">${initial}</div>
+    <div class="profile-info">
+      <h2>${user.username}</h2>
+      <p>Joined ArtVault</p>
+    </div>
+    <div style="margin-left:auto;">
+      <a href="/logout" class="btn btn-outline">Logout</a>
+    </div>
+  `;
+
+  // Fetch and display this user's artworks
+  const res      = await fetch("/my-artworks");
+  const artworks = await res.json();
+
+  const gallery = document.getElementById("my-gallery");
+
+  if (!artworks.length) {
+    gallery.innerHTML = `
+      <div class="empty-state">
+        <div class="icon">🎨</div>
+        <h3>You haven't uploaded anything yet</h3>
+        <p>Share your first artwork with the community!</p>
+        <a href="/upload" class="btn btn-primary" style="margin-top:1rem">Upload Art</a>
+      </div>`;
+    return;
+  }
+
+
+  const cards = artworks.map(art => `
+    <div class="art-card" data-id="${art.id}">
+      <img
+        src="${art.image_path}"
+        alt="${art.title}"
+        loading="lazy"
+        onclick="window.location='/artwork/${art.id}'"
+        style="cursor:pointer;"
+      />
+      <div class="art-card-body">
+        <div class="art-card-title">${art.title}</div>
+        <div class="art-card-meta">${formatDate(art.created_at)}</div>
+      </div>
+      <div class="art-card-footer">
+        <span class="like-btn" style="cursor:default;">❤️ ${art.like_count}</span>
+        <span class="category-badge">${art.category}</span>
+      </div>
+      <!-- Owner controls -->
+      <div style="display:flex; gap:.5rem; padding:.5rem 1rem .875rem;">
+        <a href="/artwork/${art.id}" class="btn btn-outline btn-sm" style="flex:1; justify-content:center;">View</a>
+        <button class="btn btn-danger btn-sm" style="flex:1;" onclick="deleteArt(${art.id}, this)">Delete</button>
+      </div>
+    </div>
+  `).join("");
+
+  gallery.innerHTML = `<div class="art-grid">${cards}</div>`;
+}
+
+
+async function deleteArt(artworkId, btn) {
+  if (!confirm("Delete this artwork? This cannot be undone.")) return;
+
+  const res = await fetch(`/delete-art/${artworkId}`, { method: "DELETE" });
+  if (res.ok) {
+    
+    const card = btn.closest(".art-card");
+    card.style.transition = "opacity .3s";
+    card.style.opacity    = "0";
+    setTimeout(() => card.remove(), 300);
+    showToast("Artwork deleted", "success");
+  } else {
+    const data = await res.json();
+    showToast(data.error || "Delete failed", "error");
+  }
+}
+
+loadProfile();
+</script>
+</body>
+</html>

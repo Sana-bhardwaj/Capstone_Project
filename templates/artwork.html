@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>ArtVault – Artwork</title>
+  <link rel="stylesheet" href="/static/css/style.css"/>
+</head>
+<body>
+
+<nav class="navbar">
+  <div class="nav-inner">
+    <a href="/" class="nav-logo">Art<em>Vault</em></a>
+    <div class="nav-links">
+      <a href="/">Gallery</a>
+      <a href="/upload">Upload</a>
+      <div id="nav-auth"></div>
+    </div>
+  </div>
+</nav>
+
+<div class="page-container">
+
+
+  <a href="/" style="display:inline-flex;align-items:center;gap:.4rem;color:var(--text-muted);font-size:.875rem;margin-bottom:1.5rem;">
+    ← Back to Gallery
+  </a>
+
+  <div id="artwork-detail">
+    <div class="spinner-wrap"><div class="spinner"></div><p>Loading…</p></div>
+  </div>
+</div>
+
+<div id="edit-modal" class="modal-overlay hidden">
+  <div class="modal">
+    <h2>Edit Artwork</h2>
+    <div class="form-group">
+      <label for="edit-title">Title</label>
+      <input id="edit-title" type="text" class="form-control" maxlength="100"/>
+    </div>
+    <div class="form-group">
+      <label for="edit-category">Category</label>
+      <select id="edit-category" class="form-control">
+        <option>Sketch</option><option>Pattern</option><option>Abstract</option>
+        <option>Portrait</option><option>Landscape</option><option>Character</option>
+        <option>Digital</option><option>Other</option>
+      </select>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeEdit()">Cancel</button>
+      <button class="btn btn-primary" onclick="saveEdit()">Save Changes</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast-container"></div>
+<script src="/static/js/main.js"></script>
+<script>
+
+/* ───────Single artwork page logic─────── */
+
+const ARTWORK_ID = parseInt(window.location.pathname.split("/").pop());
+let currentUser  = null;
+let artworkData  = null;
+
+
+async function loadArtwork() {
+  currentUser = await getCurrentUser();
+
+  const res = await fetch(`/artwork/${ARTWORK_ID}`);
+
+  if (!res.ok) {
+    document.getElementById("artwork-detail").innerHTML =
+      `<div class="empty-state"><h3>Artwork not found</h3><a href="/" class="btn btn-primary" style="margin-top:1rem">Go back</a></div>`;
+    return;
+  }
+
+  artworkData = await res.json();
+
+  const isOwner = currentUser.logged_in && currentUser.username === artworkData.username;
+
+  document.getElementById("artwork-detail").innerHTML = `
+    <div class="artwork-detail">
+
+      <!-- Left: image -->
+      <div>
+        <img src="${artworkData.image_path}" alt="${artworkData.title}"/>
+      </div>
+
+      <!-- Right: info + comments -->
+      <div class="artwork-info">
+        <span class="category-badge">${artworkData.category}</span>
+        <h1 style="margin-top:.75rem;">${artworkData.title}</h1>
+        <p style="color:var(--text-muted); margin-top:.3rem; font-size:.875rem;">
+          by <strong>${artworkData.username}</strong> · ${formatDate(artworkData.created_at)}
+        </p>
+
+        <!-- Like button -->
+        <div class="artwork-actions">
+          <button
+            id="like-btn"
+            class="like-btn ${artworkData.liked ? 'liked' : ''}"
+            onclick="handleLike()"
+            style="font-size:1rem; gap:.5rem;"
+          >
+            ❤️ <span id="like-count">${artworkData.like_count}</span> Likes
+          </button>
+
+          ${isOwner ? `
+            <button class="btn btn-outline btn-sm" onclick="openEdit()">✏️ Edit</button>
+            <button class="btn btn-danger btn-sm" onclick="confirmDelete()">🗑️ Delete</button>
+          ` : ""}
+        </div>
+
+        <!-- Comments section -->
+        <div class="comments-section">
+          <h3>💬 Comments (${artworkData.comments.length})</h3>
+
+          <div class="comment-list" id="comment-list">
+            ${artworkData.comments.length
+              ? artworkData.comments.map(renderComment).join("")
+              : `<p style="color:var(--text-muted);font-size:.875rem;">No comments yet. Be the first!</p>`
+            }
+          </div>
+
+          <!-- Add comment form (only if logged in) -->
+          ${currentUser.logged_in ? `
+            <div class="comment-form" style="margin-top:1rem;">
+              <input
+                id="comment-input"
+                type="text"
+                class="form-control"
+                placeholder="Add a comment…"
+                maxlength="500"
+              />
+              <button class="btn btn-primary btn-sm" onclick="postComment()">Post</button>
+            </div>
+          ` : `
+            <p style="margin-top:1rem; font-size:.875rem; color:var(--text-muted);">
+              <a href="/login" style="color:var(--primary);">Log in</a> to leave a comment.
+            </p>
+          `}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderComment(c) {
+  return `
+    <div class="comment-item">
+      <div class="comment-author">${c.username}</div>
+      <div class="comment-text">${c.text}</div>
+    </div>
+  `;
+}
+
+// ── Like handler ───
+async function handleLike() {
+  if (!currentUser.logged_in) {
+    showToast("Please log in to like artwork", "error");
+    return;
+  }
+  const res  = await fetch(`/like/${ARTWORK_ID}`, { method: "POST" });
+  const data = await res.json();
+  if (res.ok) {
+    document.getElementById("like-count").textContent = data.like_count;
+    document.getElementById("like-btn").classList.toggle("liked", data.liked);
+  }
+}
+
+// ── Comment handler ──
+async function postComment() {
+  const input = document.getElementById("comment-input");
+  const text  = input.value.trim();
+  if (!text) return;
+
+  const res  = await fetch(`/comment/${ARTWORK_ID}`, {
+    method:  "POST",
+    headers: { "Content-Type": "application/json" },
+    body:    JSON.stringify({ comment_text: text }),
+  });
+  const data = await res.json();
+
+  if (res.ok) {
+    input.value = "";
+    const list = document.getElementById("comment-list");
+    list.innerHTML += renderComment({ username: currentUser.username, text });
+    showToast("Comment posted!", "success");
+  } else {
+    showToast(data.error || "Could not post comment", "error");
+  }
+}
+
+document.addEventListener("keydown", (e) => {
+  const input = document.getElementById("comment-input");
+  if (e.key === "Enter" && document.activeElement === input) postComment();
+});
+
+function openEdit() {
+  document.getElementById("edit-title").value    = artworkData.title;
+  document.getElementById("edit-category").value = artworkData.category;
+  document.getElementById("edit-modal").classList.remove("hidden");
+}
+
+function closeEdit() {
+  document.getElementById("edit-modal").classList.add("hidden");
+}
+
+async function saveEdit() {
+  const title    = document.getElementById("edit-title").value.trim();
+  const category = document.getElementById("edit-category").value;
+  if (!title) { showToast("Title cannot be empty", "error"); return; }
+
+  const res  = await fetch(`/edit-art/${ARTWORK_ID}`, {
+    method:  "PUT",
+    headers: { "Content-Type": "application/json" },
+    body:    JSON.stringify({ title, category }),
+  });
+  const data = await res.json();
+
+  if (res.ok) {
+    showToast("Artwork updated!", "success");
+    closeEdit();
+    loadArtwork();   
+  } else {
+    showToast(data.error || "Update failed", "error");
+  }
+}
+
+async function confirmDelete() {
+  if (!confirm("Are you sure you want to delete this artwork? This cannot be undone.")) return;
+
+  const res = await fetch(`/delete-art/${ARTWORK_ID}`, { method: "DELETE" });
+  if (res.ok) {
+    showToast("Artwork deleted. Redirecting…", "success");
+    setTimeout(() => window.location.href = "/", 1000);
+  } else {
+    const data = await res.json();
+    showToast(data.error || "Delete failed", "error");
+  }
+}
+
+loadArtwork();
+</script>
+</body>
+</html>

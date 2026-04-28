@@ -180,4 +180,215 @@ def me():
         return jsonify({"logged_in": True, "user_id": session["user_id"], "username": session["username"]})
     return jsonify({"logged_in": False})
 
+# ── ARTWORK API routes ───
+
+@app.route("/upload-art", methods=["POST"])
+@login_required
+def upload_art():
+    """
+    Upload a new artwork.
+    Expects multipart/form-data: title, category, image (file)
+    """
+    title    = request.form.get("title", "").strip()
+    category = request.form.get("category", "Other").strip()
+    image    = request.files.get("image")
+
+    if not title or not image:
+        return jsonify({"error": "Title and image are required"}), 400
+
+    if not allowed_file(image.filename):
+        return jsonify({"error": "Only PNG, JPG, GIF, WEBP files allowed"}), 400
+
+    # Build a safe unique filename: timestamp + original name
+    timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+    filename  = f"{timestamp}_{secure_filename(image.filename)}"
+    save_path = os.path.join(app.config["UPLOAD_FOLDER"], filename)
+    image.save(save_path)
+
+    # Store relative path in DB so we can build a URL later
+    image_path = f"static/uploads/{filename}"
+
+    db = get_db()
+    db.execute(
+        "INSERT INTO artworks (user_id, title, image_path, category, created_at) VALUES (?, ?, ?, ?, ?)",
+        (session["user_id"], title, image_path, category, datetime.now().isoformat())
+    )
+    db.commit()
+    db.close()
+    return jsonify({"message": "Artwork uploaded successfully!"}), 201
+
+
+@app.route("/artworks")
+def get_artworks():
+    """
+    Return all artworks with like count and author username.
+    Optional query params:
+        q        → search by title
+        category → filter by category
+    """
+    q        = request.args.get("q", "").strip()
+    category = request.args.get("category", "").strip()
+
+    db  = get_db()
+    sql = """
+        SELECT a.id, a.title, a.image_path, a.category, a.created_at,
+               u.username,
+               COUNT(l.id) AS like_count
+        FROM artworks a
+        JOIN users u ON a.user_id = u.id
+        LEFT JOIN likes l ON a.id = l.artwork_id
+        WHERE 1=1
+    """
+    params = []
+
+    if q:
+        sql += " AND a.title LIKE ?"
+        params.append(f"%{q}%")
+
+    if category and category != "All":
+        sql += " AND a.category = ?"
+        params.append(category)
+
+    sql += " GROUP BY a.id ORDER BY a.created_at DESC"
+
+    rows = db.execute(sql, params).fetchall()
+
+    # Add whether the current user has liked each artwork
+    user_id   = session.get("user_id")
+    user_likes = set()
+    if user_id:
+        liked = db.execute("SELECT artwork_id FROM likes WHERE user_id = ?", (user_id,)).fetchall()
+        user_likes = {row["artwork_id"] for row in liked}
+
+    db.close()
+
+    artworks = []
+    for row in rows:
+        artworks.append({
+            "id":         row["id"],
+            "title":      row["title"],
+            "image_path": "/" + row["image_path"],   # make it a root-relative URL
+            "category":   row["category"],
+            "created_at": row["created_at"],
+            "username":   row["username"],
+            "like_count": row["like_count"],
+            "liked":      row["id"] in user_likes,
+        })
+
+    return jsonify(artworks)
+
+
+@app.route("/artwork/<int:artwork_id>")
+def get_artwork(artwork_id):
+    """Return a single artwork with its comments."""
+    db      = get_db()
+    artwork = db.execute("""
+        SELECT a.*, u.username,
+               COUNT(DISTINCT l.id) AS like_count
+        FROM artworks a
+        JOIN users u ON a.user_id = u.id
+        LEFT JOIN likes l ON a.id = l.artwork_id
+        WHERE a.id = ?
+        GROUP BY a.id
+    """, (artwork_id,)).fetchone()
+
+    if not artwork:
+        db.close()
+        return jsonify({"error": "Artwork not found"}), 404
+
+    comments = db.execute("""
+        SELECT c.comment_text, c.created_at, u.username
+        FROM comments c
+        JOIN users u ON c.user_id = u.id
+        WHERE c.artwork_id = ?
+        ORDER BY c.created_at
+    """, (artwork_id,)).fetchall()
+
+    user_id = session.get("user_id")
+    liked   = False
+    if user_id:
+        like = db.execute("SELECT id FROM likes WHERE user_id=? AND artwork_id=?",
+                          (user_id, artwork_id)).fetchone()
+        liked = like is not None
+
+    db.close()
+    return jsonify({
+        "id":         artwork["id"],
+        "title":      artwork["title"],
+        "image_path": "/" + artwork["image_path"],
+        "category":   artwork["category"],
+        "created_at": artwork["created_at"],
+        "username":   artwork["username"],
+        "like_count": artwork["like_count"],
+        "liked":      liked,
+        "comments": [
+            {"username": c["username"], "text": c["comment_text"], "created_at": c["created_at"]}
+            for c in comments
+        ],
+    })
+
+
+@app.route("/edit-art/<int:artwork_id>", methods=["PUT"])
+@login_required
+def edit_art(artwork_id):
+    """
+    Edit an artwork's title and/or category.
+    Only the owner can edit.
+    Expects JSON: { title, category }
+    """
+    db      = get_db()
+    artwork = db.execute("SELECT * FROM artworks WHERE id = ?", (artwork_id,)).fetchone()
+
+    if not artwork:
+        db.close()
+        return jsonify({"error": "Artwork not found"}), 404
+    if artwork["user_id"] != session["user_id"]:
+        db.close()
+        return jsonify({"error": "Not authorized"}), 403
+
+    data     = request.get_json()
+    title    = data.get("title", artwork["title"]).strip()
+    category = data.get("category", artwork["category"]).strip()
+
+    if not title:
+        db.close()
+        return jsonify({"error": "Title cannot be empty"}), 400
+
+    db.execute("UPDATE artworks SET title=?, category=? WHERE id=?", (title, category, artwork_id))
+    db.commit()
+    db.close()
+    return jsonify({"message": "Artwork updated!"})
+
+
+@app.route("/delete-art/<int:artwork_id>", methods=["DELETE"])
+@login_required
+def delete_art(artwork_id):
+    """
+    Delete an artwork and its file from disk.
+    Only the owner can delete.
+    """
+    db      = get_db()
+    artwork = db.execute("SELECT * FROM artworks WHERE id = ?", (artwork_id,)).fetchone()
+
+    if not artwork:
+        db.close()
+        return jsonify({"error": "Artwork not found"}), 404
+    if artwork["user_id"] != session["user_id"]:
+        db.close()
+        return jsonify({"error": "Not authorized"}), 403
+
+    # Delete the image file from disk
+    file_path = artwork["image_path"]
+    if os.path.exists(file_path):
+        os.remove(file_path)
+
+    # Cascade delete: remove likes + comments first, then the artwork
+    db.execute("DELETE FROM likes    WHERE artwork_id = ?", (artwork_id,))
+    db.execute("DELETE FROM comments WHERE artwork_id = ?", (artwork_id,))
+    db.execute("DELETE FROM artworks WHERE id = ?",         (artwork_id,))
+    db.commit()
+    db.close()
+    return jsonify({"message": "Artwork deleted"})
+
+
 
